@@ -15,7 +15,7 @@
 //! # Submitting events
 //!
 //! You can prepare new IO events using the `SubmissionQueueEvent` type. Once an event has been
-//! prepared, the next call to submit will submit that event. Eventually, those events will 
+//! prepared, the next call to submit will submit that event. Eventually, those events will
 //! complete, and that a `CompletionQueueEvent` will appear on the completion queue indicating that
 //! the event is complete.
 //!
@@ -35,20 +35,18 @@
 //! event (`CompletionQueueEvent` has a method to check for this).
 
 macro_rules! resultify {
-    ($ret:expr) => {
-        {
-            let ret = $ret;
-            match ret >= 0 {
-                true    => Ok(ret as _),
-                false   => Err(std::io::Error::from_raw_os_error(-ret)),
-            }
+    ($ret:expr) => {{
+        let ret = $ret;
+        match ret >= 0 {
+            true => Ok(ret as _),
+            false => Err(std::io::Error::from_raw_os_error(-ret)),
         }
-    }
+    }};
 }
 
 mod cqe;
-mod sqe;
 mod registrar;
+mod sqe;
 
 #[doc(inline)]
 pub use uring_sys as sys;
@@ -58,9 +56,9 @@ use std::mem::MaybeUninit;
 use std::ptr::{self, NonNull};
 use std::time::Duration;
 
-pub use sqe::{SubmissionQueue, SubmissionQueueEvent, SubmissionFlags, FsyncFlags};
 pub use cqe::{CompletionQueue, CompletionQueueEvent};
 pub use registrar::Registrar;
+pub use sqe::{FsyncFlags, SubmissionFlags, SubmissionQueue, SubmissionQueueEvent};
 
 bitflags::bitflags! {
     pub struct SetupFlags: u32 {
@@ -129,7 +127,9 @@ impl IoUring {
             let _: i32 = resultify! {
                 sys::io_uring_queue_init(entries as _, ring.as_mut_ptr(), flags.bits() as _)
             }?;
-            Ok(IoUring { ring: ring.assume_init() })
+            Ok(IoUring {
+                ring: ring.assume_init(),
+            })
         }
     }
 
@@ -150,7 +150,11 @@ impl IoUring {
 
     /// Returns the three constituent parts of the `IoUring`.
     pub fn queues(&mut self) -> (SubmissionQueue<'_>, CompletionQueue<'_>, Registrar<'_>) {
-        (SubmissionQueue::new(&*self), CompletionQueue::new(&*self), Registrar::new(&*self))
+        (
+            SubmissionQueue::new(&*self),
+            CompletionQueue::new(&*self),
+            Registrar::new(&*self),
+        )
     }
 
     pub fn next_sqe(&mut self) -> Option<SubmissionQueueEvent<'_>> {
@@ -174,9 +178,11 @@ impl IoUring {
         self.sq().submit_and_wait(wait_for)
     }
 
-    pub fn submit_sqes_and_wait_with_timeout(&mut self, wait_for: u32, duration: Duration)
-        -> io::Result<usize>
-    {
+    pub fn submit_sqes_and_wait_with_timeout(
+        &mut self,
+        wait_for: u32,
+        duration: Duration,
+    ) -> io::Result<usize> {
         self.sq().submit_and_wait_with_timeout(wait_for, duration)
     }
 
@@ -186,9 +192,9 @@ impl IoUring {
             let count = sys::io_uring_peek_batch_cqe(&mut self.ring, cqe.as_mut_ptr(), 1);
 
             if count > 0 {
-                Some(CompletionQueueEvent::new(NonNull::from(
-                    &self.ring),
-                    &mut *cqe.assume_init()
+                Some(CompletionQueueEvent::new(
+                    NonNull::from(&self.ring),
+                    &mut *cqe.assume_init(),
                 ))
             } else {
                 None
@@ -200,12 +206,13 @@ impl IoUring {
         self.inner_wait_for_cqes(1, ptr::null())
     }
 
-    pub fn wait_for_cqe_with_timeout(&mut self, duration: Duration)
-        -> io::Result<CompletionQueueEvent<'_>>
-    {
+    pub fn wait_for_cqe_with_timeout(
+        &mut self,
+        duration: Duration,
+    ) -> io::Result<CompletionQueueEvent<'_>> {
         let ts = sys::__kernel_timespec {
             tv_sec: duration.as_secs() as _,
-            tv_nsec: duration.subsec_nanos() as _
+            tv_nsec: duration.subsec_nanos() as _,
         };
 
         self.inner_wait_for_cqes(1, &ts)
@@ -215,20 +222,44 @@ impl IoUring {
         self.inner_wait_for_cqes(count as _, ptr::null())
     }
 
-    pub fn wait_for_cqes_with_timeout(&mut self, count: usize, duration: Duration)
-        -> io::Result<CompletionQueueEvent<'_>>
-    {
+    pub fn wait_for_cqes_multi(
+        &mut self,
+        count: usize,
+    ) -> io::Result<Vec<CompletionQueueEvent<'_>>> {
+        self.inner_wait_for_cqes_multi(count as _, ptr::null())
+    }
+
+    pub fn wait_for_cqes_multi_with_timeout(
+        &mut self,
+        count: usize,
+        duration: Duration,
+    ) -> io::Result<Vec<CompletionQueueEvent<'_>>> {
         let ts = sys::__kernel_timespec {
             tv_sec: duration.as_secs() as _,
-            tv_nsec: duration.subsec_nanos() as _
+            tv_nsec: duration.subsec_nanos() as _,
+        };
+
+        self.inner_wait_for_cqes_multi(count as _, &ts)
+    }
+
+    pub fn wait_for_cqes_with_timeout(
+        &mut self,
+        count: usize,
+        duration: Duration,
+    ) -> io::Result<CompletionQueueEvent<'_>> {
+        let ts = sys::__kernel_timespec {
+            tv_sec: duration.as_secs() as _,
+            tv_nsec: duration.subsec_nanos() as _,
         };
 
         self.inner_wait_for_cqes(count as _, &ts)
     }
 
-    fn inner_wait_for_cqes(&mut self, count: u32, ts: *const sys::__kernel_timespec)
-        -> io::Result<CompletionQueueEvent<'_>>
-    {
+    fn inner_wait_for_cqes(
+        &mut self,
+        count: u32,
+        ts: *const sys::__kernel_timespec,
+    ) -> io::Result<CompletionQueueEvent<'_>> {
         unsafe {
             let mut cqe = MaybeUninit::uninit();
 
@@ -240,7 +271,36 @@ impl IoUring {
                 ptr::null(),
             ))?;
 
-            Ok(CompletionQueueEvent::new(NonNull::from(&self.ring), &mut *cqe.assume_init()))
+            Ok(CompletionQueueEvent::new(
+                NonNull::from(&self.ring),
+                &mut *cqe.assume_init(),
+            ))
+        }
+    }
+
+    fn inner_wait_for_cqes_multi(
+        &mut self,
+        count: u32,
+        ts: *const sys::__kernel_timespec,
+    ) -> io::Result<Vec<CompletionQueueEvent<'_>>> {
+        unsafe {
+            let mut cqe = ptr::null_mut();
+
+            let _: i32 = resultify!(sys::io_uring_wait_cqes(
+                &mut self.ring,
+                &mut cqe,
+                count,
+                ts,
+                ptr::null(),
+            ))?;
+
+            let mut entries = Vec::with_capacity(count as usize);
+            for n in 0..count as isize {
+                let cqe = CompletionQueueEvent::new(NonNull::from(&self.ring), &mut *cqe.offset(n));
+                entries.push(cqe);
+            }
+
+            Ok(entries)
         }
     }
 
@@ -259,8 +319,8 @@ impl Drop for IoUring {
     }
 }
 
-unsafe impl Send for IoUring { }
-unsafe impl Sync for IoUring { }
+unsafe impl Send for IoUring {}
+unsafe impl Sync for IoUring {}
 
 // This has to live in an inline module to test the non-exported resultify macro.
 #[cfg(test)]
@@ -274,17 +334,26 @@ mod tests {
 
         let mut calls = 0;
         let ret: Result<i32, _> = resultify!(side_effect(0, &mut calls));
-        assert!(match ret { Ok(0) => true, _ => false });
+        assert!(match ret {
+            Ok(0) => true,
+            _ => false,
+        });
         assert_eq!(calls, 1);
 
         calls = 0;
         let ret: Result<i32, _> = resultify!(side_effect(1, &mut calls));
-        assert!(match ret { Ok(1) => true, _ => false });
+        assert!(match ret {
+            Ok(1) => true,
+            _ => false,
+        });
         assert_eq!(calls, 1);
 
         calls = 0;
         let ret: Result<i32, _> = resultify!(side_effect(-1, &mut calls));
-        assert!(match ret { Err(e) if e.raw_os_error() == Some(1) => true, _ => false });
+        assert!(match ret {
+            Err(e) if e.raw_os_error() == Some(1) => true,
+            _ => false,
+        });
         assert_eq!(calls, 1);
     }
 }
